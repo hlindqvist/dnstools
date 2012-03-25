@@ -277,6 +277,8 @@ value %default")
     parser.add_option("-v", "--verbose", action = "store_true",
                       dest = "verbose", default=False, help="print verbose \
 messages suitable for troubleshooting")
+    parser.add_option("--dry-run", action = "store_true", dest = "dry_run",
+                      default = False, help = "do not actually send update")
 
     options, args = parser.parse_args()
 
@@ -341,6 +343,11 @@ messages suitable for troubleshooting")
 
     if (options.verbose):
         verbose_print("Request", update)
+
+    if (options.dry_run):
+        if (not options.quiet):
+            print ("Dry run mode, exiting.")
+        clean_exit(temp_file.name)
 
     response = send_query(update, serveraddress, options.timeout)
 
