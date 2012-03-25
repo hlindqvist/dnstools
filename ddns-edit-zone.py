@@ -32,6 +32,9 @@
 # * If you update the SOA you must also update its serial manually.
 # * You can not set different TTLs for records with the same owner
 #   and rrtype combination (same RRset).
+# * Use absolute names if specifying a new $ORIGIN value, currently (1.9.4)
+#   dnspython does not appear to handle relative names for new origin
+#   values correctly and affected records may end up out of zone(?).
 #
 # Prerequisites:
 # 1) A TSIG key that allows you to perform AXFR and dynamic updates of
