@@ -38,6 +38,7 @@
 #    your zone.
 # 2) The TSIG key must be provided in the form of a file with a single
 #    KEY record (what dnssec-keygen(8) generates).
+#    Alternatively the bind9 session key file can be used.
 # 3) Python 2.6(?) or later
 # 4) Dnspython (http://www.dnspython.org/) 1.9.0 or later
 #    Please see this mail for a patch if you want to try using this
@@ -54,6 +55,7 @@ import os.path
 import base64
 import tempfile
 import subprocess
+import re
 
 import dns.query
 import dns.zone
@@ -88,6 +90,55 @@ def read_tsig_key_from_file(filename):
                                           base64.b64encode(key[2].key) })
     keyalgo = get_tsig_algorithm_name(key[2].algorithm)
 
+    return [keyring, keyalgo]
+
+
+def read_tsig_key_from_session(filename):
+
+    # Attempt to parse the bind session.key file.
+
+    # Read the whole file (expected to be small).
+    session_key_file = open(filename, "r")
+    session_key = session_key_file.read()
+    session_key_file.close()
+
+    # Remove any comments.
+    session_key = re.sub(re.compile(r'/\*.*?\*/', re.S), '', session_key)
+    session_key = re.sub(re.compile(r'//.*$', re.M), '', session_key)
+    session_key = re.sub(re.compile(r'#.*$', re.M), '', session_key)
+
+    # Try to find the "key" statement and get the key_id and contents.
+    m = re.search(r'(?:^|;)\s*key\s+((?:"[^"]+")|(?:[^"]\S*))\s*{(.*?)}\s*;',
+                  session_key, flags = re.S)
+
+    if (m is None):
+        raise Exception('No "key" statement found in %(file)s.' %
+                        { "file": filename })
+
+    key_id = m.group(1).strip('"')
+    key_contents = m.group(2)
+
+    # Inside the key statement, try to find the "algorithm" value.
+    m = re.search(r'(?:^|;)\s*algorithm\s+((?:"[^"]+")|(?:[^"]\S*))\s*;',
+                  key_contents)
+
+    if (m is None):
+        raise Exception('No "algorithm" statement found inside the "key" \
+statement in %(file)s.' % { "file": filename})
+
+    keyalgo = m.group(1).strip('"')
+
+    # Inside the key statement, try to find the "secret" value.
+    m = re.search(r'(?:^|;)\s*secret\s+((?:"[^"]+")|(?:[^"]\S*))\s*;',
+                  key_contents)
+
+    if (m is None):
+        raise Exception('No "secret" statement found inside the "key" \
+statement in %(file)s.' % { "file": filename})
+
+    secret = m.group(1).strip('"')
+
+    keyring = dns.tsigkeyring.from_text({ key_id: secret })
     return [keyring, keyalgo]
 
 
@@ -210,6 +261,14 @@ updated while editing")
                       dest = "timeout", default = 10,
                       help = "query timeout (in seconds), default value \
 %default")
+    parser.add_option("-l", "--use-session-key", action = "store_true",
+                      dest = "use_session_key", default = False, 
+                      help = "use bind9 session key")
+    parser.add_option("--session-key-path", action = "store", 
+                      dest = "session_key", 
+                      default = "/var/run/named/session.key", 
+                      help = "override path to bind9 session key, default \
+value %default")
     parser.add_option("-q", "--quiet", action = "store_true", dest = "quiet",
                       default = False, help = "do not print status messages")
     parser.add_option("-v", "--verbose", action = "store_true",
@@ -218,13 +277,18 @@ messages suitable for troubleshooting")
 
     options, args = parser.parse_args()
 
-    if (len(args) != 3):
+    if ((not options.use_session_key and len(args) != 3)
+        or (options.use_session_key and len(args) != 2)):
         parser.print_help();
         exit(-1)
 
     serveraddress = args[0]
     zonename = args[1]
-    keyring, keyalgo = read_tsig_key_from_file(args[2])
+
+    if (not options.use_session_key):
+        keyring, keyalgo = read_tsig_key_from_file(args[2])
+    else:
+        keyring, keyalgo = read_tsig_key_from_session(options.session_key)
 
     editor = get_default_editor()
 
