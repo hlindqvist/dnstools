@@ -82,6 +82,9 @@ def get_default_editor():
     return (os.environ.get('DNSEDITOR') or os.environ.get('VISUAL') or
             os.environ.get('EDITOR') or 'vi')
 
+def get_default_session_key_path():
+    return (os.environ.get("BIND_SESSION_KEY_PATH") or
+            "/var/run/named/session.key")
 
 def read_tsig_key_from_file(filename):
     key_zone = dns.zone.from_file(filename, origin = ".",
@@ -274,9 +277,9 @@ updated while editing")
                       help = "use bind9 session key")
     parser.add_option("--session-key-path", action = "store", 
                       dest = "session_key", 
-                      default = "/var/run/named/session.key", 
+                      default = get_default_session_key_path(), 
                       help = "override path to bind9 session key, default \
-value %default")
+value BIND_SESSION_KEY_PATH or %default")
     parser.add_option("-q", "--quiet", action = "store_true", dest = "quiet",
                       default = False, help = "do not print status messages")
     parser.add_option("-v", "--verbose", action = "store_true",
