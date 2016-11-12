@@ -87,14 +87,23 @@ def get_default_session_key_path():
             "/var/run/named/session.key")
 
 def read_tsig_key_from_file(filename):
-    key_zone = dns.zone.from_file(filename, origin = ".",
-                                  check_origin = False, relativize = False)
 
-    key = get_single_record(key_zone.iterate_rdatas(), dns.rdatatype.KEY)
+    # Read the whole file (expected to be small).
+    key_file = open(filename, "r")
+    key = key_file.read()
+    key_file.close()
 
-    keyring = dns.tsigkeyring.from_text({ key[0].to_text(): 
-                                          base64.b64encode(key[2].key) })
-    keyalgo = get_tsig_algorithm_name(key[2].algorithm)
+    # Somewhat simplistic view of what a KEY record looks like
+    # Dnspython removed KEY support as it's not really used in DNS itself
+    m = re.search(r'^(\S+)\s+IN\s+KEY\s+\d+\s+\d+\s+(\d+)\s+(.*)$', key, flags=re.M)
+
+    if (m is None):
+        raise Exception('No "KEY" record found in %(file)s.' %
+                        { "file": filename })
+
+    keyring = dns.tsigkeyring.from_text({ m.group(1): m.group(3) })
+
+    keyalgo = get_tsig_algorithm_name(int(m.group(2)))
 
     return [keyring, keyalgo]
 
