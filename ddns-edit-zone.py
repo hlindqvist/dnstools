@@ -181,14 +181,15 @@ but found %(count)d, aborting..." %
     return records[0]
 
 
-def remove_dnssec_from_zone(zone):
+def remove_dnssec_from_zone(zone, only_remove_sigs):
     for record in list(zone.iterate_rdatas()):
         zone.delete_rdataset(record[0], dns.rdatatype.RRSIG,
                              covers=record[2].rdtype)
         zone.delete_rdataset(record[0], dns.rdatatype.NSEC)
         zone.delete_rdataset(record[0], dns.rdatatype.NSEC3)
-        zone.delete_rdataset(record[0], dns.rdatatype.NSEC3PARAM)
-        zone.delete_rdataset(record[0], dns.rdatatype.DNSKEY)
+        if (not only_remove_sigs):
+            zone.delete_rdataset(record[0], dns.rdatatype.NSEC3PARAM)
+            zone.delete_rdataset(record[0], dns.rdatatype.DNSKEY)
 
 
 def generate_update_from_diff(zonename, original_zone, updated_zone,
@@ -252,6 +253,10 @@ TSIG use (what dnssec-keygen(8) generates)"
                       dest = "absolute_names", default = False,
                       help = "use absolute names instead of names relative \
 to zone apex")
+    parser.add_option("-S", "--include-dnssec-nonsigs", action = "store_true",
+                      dest = "include_dnssec_nonsigs", default = False,
+                      help = "include NSEC3PARAM/DNSKEY \
+records when editing")
     parser.add_option("-s", "--include-dnssec", action = "store_true",
                       dest = "include_dnssec", default = False,
                       help = "include RRSIG/NSEC/NSEC3/NSEC3PARAM/DNSKEY \
@@ -307,7 +312,7 @@ messages suitable for troubleshooting")
                                        keyalgo, options.timeout)
 
     if (not options.include_dnssec):
-        remove_dnssec_from_zone(original_zone)
+        remove_dnssec_from_zone(original_zone, options.include_dnssec_nonsigs)
 
     write_zone_to_file(temp_file, original_zone, options.absolute_names)
 
