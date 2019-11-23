@@ -1,6 +1,6 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
-#   Copyright 2011-2016 Hakan Lindqvist <dnstools@qw.se>
+#   Copyright 2011-2019 Hakan Lindqvist <dnstools@qw.se>
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -42,11 +42,8 @@
 # 2) The TSIG key must be provided in the form of a file with a single
 #    KEY record (what dnssec-keygen(8) generates).
 #    Alternatively the bind9 session key file can be used.
-# 3) Python 2.6(?) or later
-# 4) Dnspython (http://www.dnspython.org/) 1.9.0 or later
-#    Please see this mail for a patch if you want to try using this
-#    with version 1.8.0 of dnspython:
-#    http://permalink.gmane.org/gmane.comp.python.dnspython.user/104
+# 3) Python 3
+# 4) Dnspython (http://www.dnspython.org/)
 #
 # Project home: https://github.com/hlindqvist/dnstools
 #
@@ -161,7 +158,7 @@ def read_zone_via_axfr(serveraddress, zonename, keyring, keyalgo, timeout):
     return dns.zone.from_xfr(dns.query.xfr(serveraddress, zonename, 
                                            keyring = keyring,
                                            keyalgorithm = keyalgo,
-                                           timeout = timeout))
+                                           timeout = timeout, lifetime=timeout))
 
 
 def read_zone_from_file(filename, zonename):
@@ -176,14 +173,14 @@ def get_zone_diff(original_zone, updated_zone):
     original = list(original_zone.iterate_rdatas())
     updated = list(updated_zone.iterate_rdatas())
 
-    added = filter(lambda record: record not in original, updated)
-    removed = filter(lambda record: record not in updated, original)
+    added = list(filter(lambda record: record not in original, updated))
+    removed = list(filter(lambda record: record not in updated, original))
 
     return [added, removed]
 
 
 def get_single_record(rdatas, rdtype):
-    records = filter(lambda record: record[2].rdtype == rdtype, rdatas)
+    records = list(filter(lambda record: record[2].rdtype == rdtype, rdatas))
 
     if (len(records) != 1):
         raise Exception("Expected exactly one record of type %(type)s \
@@ -232,11 +229,11 @@ def send_query(query, serveraddress, timeout):
 
 
 def verbose_print(header, obj):
-    print
-    print header + ":"
-    print "-" * 20
-    print obj
-    print "-" * 20
+    print()
+    print(header + ":")
+    print("-" * 20)
+    print(obj)
+    print("-" * 20)
 
 
 def clean_exit(filename):
@@ -351,11 +348,11 @@ messages suitable for troubleshooting")
 
     if (num_added == 0 and num_removed == 0):
         if (not options.quiet):
-            print "No changes detected."
+            print("No changes detected.")
         clean_exit(temp_file.name)
 
     if (not options.quiet):
-        print ("Adding %(added)d records, deleting %(removed)d records." %
+        print("Adding %(added)d records, deleting %(removed)d records." %
                { "added": num_added, "removed": num_removed })
 
     if (options.verbose):
@@ -363,7 +360,7 @@ messages suitable for troubleshooting")
 
     if (options.dry_run):
         if (not options.quiet):
-            print ("Dry run mode, exiting.")
+            print("Dry run mode, exiting.")
         clean_exit(temp_file.name)
 
     response = send_query(update, serveraddress, options.timeout)
@@ -375,18 +372,18 @@ messages suitable for troubleshooting")
     # Print summary of results
 
     if (not options.quiet):
-        print ("Update sent. Return code: %(rcode)s" % 
+        print("Update sent. Return code: %(rcode)s" % 
                { "rcode": dns.rcode.to_text(response.rcode()) })
-        print
+        print()
 
     if (response.rcode() == dns.rcode.NXRRSET):
-        print >> sys.stderr, "Error: It appears that the zone was updated \
+        print("Error: It appears that the zone was updated \
 while editing. Specify --force-conflicts on the command-line if you find this \
-an acceptable risk."
+an acceptable risk.", file=sys.stderr)
 
     if (response.rcode() != dns.rcode.NOERROR):
-        print >> sys.stderr, "Update failed, leaving temp file with your \
-changes at: %(tempfile)s" % { "tempfile": temp_file.name }
+        print("Update failed, leaving temp file with your \
+changes at: %(tempfile)s" % { "tempfile": temp_file.name }, file=sys.stderr)
         exit(1000 + response.rcode())
 
 
