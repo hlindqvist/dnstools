@@ -68,8 +68,11 @@ def get_tsig_algorithm_name(algo):
     # Mapping between the algorithm id from the KEY record to the
     # algorithm name, I did not find anything doing this in dnspython
 
-    algorithms = {157: "HMAC-MD5", 161: "HMAC-SHA1", 162: "HMAC-SHA224",
-                  163: "HMAC-SHA256", 164: "HMAC-SHA384",
+    algorithms = {157: "HMAC-MD5.SIG-ALG.REG.INT",
+                  161: "HMAC-SHA1",
+                  162: "HMAC-SHA224",
+                  163: "HMAC-SHA256",
+                  164: "HMAC-SHA384",
                   165: "HMAC-SHA512"}
     return algorithms.get(algo)
 
