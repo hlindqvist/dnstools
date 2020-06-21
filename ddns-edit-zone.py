@@ -44,15 +44,17 @@
 #    Alternatively the bind9 session key file can be used.
 # 3) Python 3
 # 4) Dnspython (http://www.dnspython.org/)
+# 5) Click (https://click.palletsprojects.com/en/7.x/)
+#
 #
 # Project home: https://github.com/hlindqvist/dnstools
 #
 
 
 import sys
-import optparse
 import os.path
 import tempfile
+import traceback
 import subprocess
 import re
 
@@ -62,6 +64,8 @@ import dns.update
 import dns.tsigkeyring
 import dns.name
 import dns.rcode
+
+import click
 
 
 def get_tsig_algorithm_name(algo):
@@ -242,161 +246,123 @@ def verbose_print(header, obj):
     print("-" * 20)
 
 
-def clean_exit(filename):
-    os.unlink(filename)
-    exit(0)
+def cleanup_and_exit(filename, success, rcode=None):
+    if success or click.confirm("Delete temporary file %(filename)s?" %
+                                {"filename": filename}, default=True):
+        os.unlink(filename)
+
+    exit(0 if success else 1000 + rcode)
 
 
-def main():
+@click.command()
+@click.option("-a", "--absolute-names", default=False, is_flag=True,
+              help="use absolute names instead of names relative to zone apex")
+@click.option("-S", "--include-dnssec-nonsigs", default=False, is_flag=True,
+              help="include NSEC3PARAM/DNSKEY records when editing")
+@click.option("-s", "--include-dnssec", default=False, is_flag=True,
+              help="include RRSIG/NSEC/NSEC3/NSEC3PARAM/DNSKEY records when "
+                   "editing")
+@click.option("-c", "--force-conflicts", default=False, is_flag=True,
+              help="apply local changes even if zone has been updated while "
+                   "editing")
+@click.option("-t", "--timeout", type=float, default=10,
+              help="query timeout (in seconds)", show_default=True)
+@click.option("-l", "--use-session-key", default=False, is_flag=True,
+              help="use bind9 session key")
+@click.option("--session-key-path",
+              default=get_default_session_key_path(),
+              help="override path to bind9 session key, also picked up from "
+                   "environment BIND_SESSION_KEY_PATH", show_default=True,
+              type=click.Path(exists=False))
+@click.option("-q", "--quiet", default=False, is_flag=True,
+              help="do not print status messages")
+@click.option("-v", "--verbose", default=False, is_flag=True,
+              help="print verbose messages suitable for troubleshooting")
+@click.option("--dry-run", default=False, help="do not actually send update")
+@click.argument('nameserver')
+@click.argument('zonename')
+@click.argument('keyfile', type=click.Path(exists=True), default=None,
+                required=False)
+def main(absolute_names, include_dnssec_nonsigs, include_dnssec,
+         force_conflicts, timeout, use_session_key, session_key_path, quiet,
+         verbose, dry_run, nameserver, zonename, keyfile):
 
-    # Process command-line arguments
-    usage = "Usage: %prog [OPTION]... NAMESERVER ZONENAME KEYFILE"
-
-    description = ("Edit ZONENAME hosted on NAMESERVER, authenticate AXFR and "
-                   "update request with the key from KEYFILE")
-
-    epilog = ("The editor will be chosen based on the environment variables "
-              "DNSEDITOR, VISUAL or EDITOR in that order or default to 'vi' "
-              "if none of them were set. KEYFILE is expected to contain "
-              "exactly one KEY record suitable for TSIG use "
-              "(what dnssec-keygen(8) generates)")
-
-    parser = optparse.OptionParser(usage=usage, description=description,
-                                   epilog=epilog)
-
-    parser.add_option("-a", "--absolute-names",
-                      action="store_true",
-                      dest="absolute_names",
-                      default=False,
-                      help="use absolute names instead of names relative to "
-                           "zone apex")
-
-    parser.add_option("-S", "--include-dnssec-nonsigs",
-                      action="store_true",
-                      dest="include_dnssec_nonsigs",
-                      default=False,
-                      help="include NSEC3PARAM/DNSKEY records when editing")
-
-    parser.add_option("-s", "--include-dnssec",
-                      action="store_true",
-                      dest="include_dnssec",
-                      default=False,
-                      help="include RRSIG/NSEC/NSEC3/NSEC3PARAM/DNSKEY "
-                           "records when editing")
-
-    parser.add_option("-c", "--force-conflicts",
-                      action="store_true",
-                      dest="force_conflicts",
-                      default=False,
-                      help="apply local changes even if zone has been updated "
-                           "while editing")
-
-    parser.add_option("-t", "--timeout",
-                      action="store",
-                      type="float",
-                      dest="timeout",
-                      default=10,
-                      help="query timeout (in seconds), default value "
-                           "%default")
-
-    parser.add_option("-l", "--use-session-key",
-                      action="store_true",
-                      dest="use_session_key",
-                      default=False,
-                      help="use bind9 session key")
-
-    parser.add_option("--session-key-path",
-                      action="store",
-                      dest="session_key",
-                      default=get_default_session_key_path(),
-                      help="override path to bind9 session key, default value "
-                           "BIND_SESSION_KEY_PATH or %default")
-
-    parser.add_option("-q", "--quiet",
-                      action="store_true",
-                      dest="quiet",
-                      default=False,
-                      help="do not print status messages")
-
-    parser.add_option("-v", "--verbose",
-                      action="store_true",
-                      dest="verbose",
-                      default=False,
-                      help="print verbose messages suitable for "
-                           "troubleshooting")
-
-    parser.add_option("--dry-run",
-                      action="store_true",
-                      dest="dry_run",
-                      default=False,
-                      help="do not actually send update")
-
-    options, args = parser.parse_args()
-
-    if ((not options.use_session_key and len(args) != 3)
-            or (options.use_session_key and len(args) != 2)):
-        parser.print_help()
+    if (not use_session_key and not keyfile) or (use_session_key and keyfile):
+        print("Either specify KEYFILE or use --use-session-key",
+              file=sys.stderr)
         exit(-1)
 
-    serveraddress = args[0]
-    zonename = args[1]
-
-    if (not options.use_session_key):
-        keyring, keyalgo = read_tsig_key_from_file(args[2])
+    if (not use_session_key):
+        keyring, keyalgo = read_tsig_key_from_file(keyfile)
     else:
-        keyring, keyalgo = read_tsig_key_from_session(options.session_key)
+        keyring, keyalgo = read_tsig_key_from_session(session_key_path)
 
     editor = get_default_editor()
 
     # Fetch original zone data end put it in a temp file
 
     temp_file = tempfile.NamedTemporaryFile(delete=False)
-    original_zone = read_zone_via_axfr(serveraddress, zonename, keyring,
-                                       keyalgo, options.timeout)
+    original_zone = read_zone_via_axfr(nameserver, zonename, keyring,
+                                       keyalgo, timeout)
 
-    if (not options.include_dnssec):
-        remove_dnssec_from_zone(original_zone, options.include_dnssec_nonsigs)
+    if (not include_dnssec):
+        remove_dnssec_from_zone(original_zone, include_dnssec_nonsigs)
 
-    write_zone_to_file(temp_file, original_zone, options.absolute_names)
+    write_zone_to_file(temp_file, original_zone, absolute_names)
     temp_file.close()
 
-    # Open temp file in editor
-    subprocess.call([editor, temp_file.name])
+    edit_file_again = True
+    while edit_file_again:
+        # Open temp file in editor
+        subprocess.call([editor, temp_file.name])
 
-    # Read back the updated zone data from temp file
-    updated_zone = read_zone_from_file(temp_file.name, zonename)
+        try:
+            # Read back the updated zone data from temp file
+            updated_zone = read_zone_from_file(temp_file.name, zonename)
+            edit_file_again = False
+        except Exception as ex:
+            print("Error reading updated zone file!")
+            print(ex)
+
+            if verbose:
+                traceback.print_exc(file=sys.stdout)
+
+            edit_file_again = click.confirm("Open file again for editing?",
+                                            default=True)
+            if not edit_file_again:
+                cleanup_and_exit(temp_file.name, False, 0)
 
     # Generate and send dynamic update based on zone changes
     update, num_added, num_removed = generate_update_from_diff(
         zonename, original_zone,
         updated_zone, keyring,
         keyalgo,
-        options.force_conflicts)
+        force_conflicts)
 
     if (num_added == 0 and num_removed == 0):
-        if (not options.quiet):
+        if (not quiet):
             print("No changes detected.")
-        clean_exit(temp_file.name)
+        cleanup_and_exit(temp_file.name, True)
 
-    if (not options.quiet):
+    if (not quiet):
         print("Adding %(added)d records, deleting %(removed)d records." %
               {"added": num_added, "removed": num_removed})
 
-    if (options.verbose):
+    if (verbose):
         verbose_print("Request", update)
 
-    if (options.dry_run):
-        if (not options.quiet):
+    if (dry_run):
+        if (not quiet):
             print("Dry run mode, exiting.")
-        clean_exit(temp_file.name)
+        cleanup_and_exit(temp_file.name, True)
 
-    response = send_query(update, serveraddress, options.timeout)
+    response = send_query(update, nameserver, timeout)
 
-    if (options.verbose):
+    if (verbose):
         verbose_print("Response", response)
 
     # Print summary of results
-    if (not options.quiet):
+    if (not quiet):
         print("Update sent. Return code: %(rcode)s" %
               {"rcode": dns.rcode.to_text(response.rcode())})
         print()
@@ -407,12 +373,12 @@ def main():
               "an acceptable risk.", file=sys.stderr)
 
     if (response.rcode() != dns.rcode.NOERROR):
-        print("Update failed, leaving temp file with your changes at: "
-              "%(tempfile)s" % {"tempfile": temp_file.name}, file=sys.stderr)
-        exit(1000 + response.rcode())
+        print("Update failed with return code: %(rcode)s" %
+              {"rcode": dns.rcode.to_text(response.rcode())}, file=sys.stderr)
 
     # Clean up temp file and exit cleanly if we got this far
-    clean_exit(temp_file.name)
+    cleanup_and_exit(temp_file.name, response.rcode() == dns.rcode.NOERROR,
+                     response.rcode())
 
 
 if (__name__ == "__main__"):
