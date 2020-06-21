@@ -97,7 +97,8 @@ def read_tsig_key_from_file(filename):
     # Somewhat simplistic view of what a KEY record looks like
     # Dnspython removed KEY support as it's not really used in DNS itself
     m = re.search(
-        r'^(\S+)\s+IN\s+KEY\s+\d+\s+\d+\s+(\d+)\s+(.*)$', key, flags=re.M)
+        r'^(\S+)\s+(?:\d+\s+)?IN\s+KEY\s+\d+\s+\d+\s+(\d+)\s+(.*)$', key,
+        flags=re.M)
 
     if (m is None):
         raise Exception('No "KEY" record found in %(file)s.' %
