@@ -54,7 +54,6 @@
 import sys
 import os.path
 import tempfile
-import traceback
 import subprocess
 import re
 
@@ -64,6 +63,7 @@ import dns.update
 import dns.tsigkeyring
 import dns.name
 import dns.rcode
+import dns.exception
 
 import click
 
@@ -168,11 +168,13 @@ def read_zone_via_axfr(serveraddress, zonename, keyring, keyalgo, timeout):
     return dns.zone.from_xfr(dns.query.xfr(serveraddress, zonename,
                                            keyring=keyring,
                                            keyalgorithm=keyalgo,
-                                           timeout=timeout, lifetime=timeout))
+                                           timeout=timeout, lifetime=timeout,
+                                           relativize=False),
+                             relativize=False)
 
 
 def read_zone_from_file(filename, zonename):
-    return dns.zone.from_file(filename, origin=zonename)
+    return dns.zone.from_file(filename, origin=zonename, relativize=False)
 
 
 def write_zone_to_file(zone_file, zone, absolute_names):
@@ -211,19 +213,17 @@ def remove_dnssec_from_zone(zone, only_remove_sigs):
             zone.delete_rdataset(record[0], dns.rdatatype.DNSKEY)
 
 
-def generate_update_from_diff(zonename, original_zone, updated_zone,
+def generate_update_from_diff(zonename, added, removed, oldsoa,
                               keyring, keyalgo, force_conflicts):
+
     update = dns.update.Update(zonename, keyring=keyring,
                                keyalgorithm=keyalgo)
 
     if (not force_conflicts):
         # Require the old SOA to still be present
         # (Essentially requires that the zone hasn't changed while editing)
-        oldsoa = get_single_record(original_zone.iterate_rdatas(),
-                                   dns.rdatatype.SOA)
-        update.present(oldsoa[0], oldsoa[2])
 
-    added, removed = get_zone_diff(original_zone, updated_zone)
+        update.present(oldsoa[0], oldsoa[2])
 
     for (name, ttl, rdata) in removed:
         update.delete(name, rdata)
@@ -231,11 +231,29 @@ def generate_update_from_diff(zonename, original_zone, updated_zone,
     for (name, ttl, rdata) in added:
         update.add(name, ttl, rdata)
 
-    return [update, len(added), len(removed)]
+    return update
 
 
 def send_query(query, serveraddress, timeout):
     return dns.query.tcp(query, serveraddress, timeout=timeout)
+
+
+def print_rr_diff(added, removed):
+    def make_rr_string(rr):
+        return ("%(name)s %(ttl)d %(class)s %(type)s %(rdata)s" %
+                {"name": str(rr[0]),
+                 "ttl": rr[1],
+                 "class": dns.rdataclass.to_text(rr[2].rdclass),
+                 "type": dns.rdatatype.to_text(rr[2].rdtype),
+                 "rdata": str(rr[2])})
+
+    rrs = sorted(sorted([rr + ('-',) for rr in removed] +
+                        [rr + ('+',) for rr in added],
+                        key=lambda rr: rr[2].rdtype),
+                 key=lambda rr: rr[0])
+
+    for rr in rrs:
+        print(rr[3] + " " + make_rr_string(rr))
 
 
 def verbose_print(header, obj):
@@ -319,34 +337,59 @@ def main(absolute_names, include_dnssec_nonsigs, include_dnssec,
         try:
             # Read back the updated zone data from temp file
             updated_zone = read_zone_from_file(temp_file.name, zonename)
-            edit_file_again = False
-        except Exception as ex:
+        except dns.exception.SyntaxError as ex:
             print("Error reading updated zone file!")
             print(ex)
 
-            if verbose:
-                traceback.print_exc(file=sys.stdout)
-
             edit_file_again = click.confirm("Open file again for editing?",
                                             default=True)
-            if not edit_file_again:
+            if edit_file_again:
+                continue
+            else:
                 cleanup_and_exit(temp_file.name, False, 0)
 
-    # Generate and send dynamic update based on zone changes
-    update, num_added, num_removed = generate_update_from_diff(
-        zonename, original_zone,
-        updated_zone, keyring,
-        keyalgo,
-        force_conflicts)
+        # Generate and send dynamic update based on zone changes
+        added, removed = get_zone_diff(original_zone, updated_zone)
 
-    if (num_added == 0 and num_removed == 0):
+        if (len(added) == 0 and len(removed) == 0):
+            if (not quiet):
+                print("No changes detected.")
+            cleanup_and_exit(temp_file.name, True)
+
+        oldsoa = get_single_record(original_zone.iterate_rdatas(),
+                                   dns.rdatatype.SOA)
+
+        update = generate_update_from_diff(
+            zonename, added,
+            removed, oldsoa, keyring,
+            keyalgo,
+            force_conflicts)
+
         if (not quiet):
-            print("No changes detected.")
-        cleanup_and_exit(temp_file.name, True)
+            print("Adding %(added)d records, deleting %(removed)d records." %
+                  {"added": len(added), "removed": len(removed)})
 
-    if (not quiet):
-        print("Adding %(added)d records, deleting %(removed)d records." %
-              {"added": num_added, "removed": num_removed})
+            while True:
+                action = click.prompt("Action: (a)pply changes? "
+                                      "view (d)etails? "
+                                      "(e)dit file again? "
+                                      "(q)uit? ",
+                                      type=click.Choice(["a", "d", "e", "q"]),
+                                      default="d", show_choices=True)
+
+                if action == "d":
+                    print_rr_diff(added, removed)
+                elif action == "e":
+                    edit_file_again = True
+                    break
+                elif action == "a":
+                    edit_file_again = False
+                    break
+                elif action == "q":
+                    cleanup_and_exit(temp_file.name, False, 0)
+                else:
+                    raise Exception("Unknown action '%(action)s'" %
+                                    {"action": action})
 
     if (verbose):
         verbose_print("Request", update)
