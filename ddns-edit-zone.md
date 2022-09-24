@@ -1,42 +1,36 @@
 # ddns-edit-zone.py
 
-This tool will fetch the existing zone contents via AXFR (RFC 1034), save it to a regular "master" zone file (RFC 1035) which it opens in your editor of choice.  
-When said editor exits the updated file will be read and a dynamic update (RFC 2136) generated based on the diff compared to the original file
-contents.  
-By default this dynamic update also includes the original SOA value in the prerequisite section as a safeguard in case of conflicting changes.
+This tool allows you to use an "edit the zone file" workflow for a nameserver where you have dynamic update
+access (+ AXFR access).
 
+The tool will fetch the existing zone contents via AXFR (RFC 1034), save it to a regular "master" zone file (RFC 1035) which it opens in your editor of choice for editing.  
+When said editor exits the updated file will be read and a dynamic update (RFC 2136) generated based on the diff compared to the original file contents.  
+By default this dynamic update also includes the old SOA value as a prerequisite for the update, as a safeguard in case of conflicting changes happening in parallel (this may or may not fit your workflow).
+
+## Download
+
+Get the current version of the [ddns-edit-zone.py script](https://raw.githubusercontent.com/hlindqvist/dnstools/master/ddns-edit-zone.py).
 
 ## Installing prerequisites
 
-Ensure you have a python installation with dnspython.
+Ensure you have a python3 installation with [dnspython](http://www.dnspython.org/) and
+[click](https://click.palletsprojects.com/en/7.x/).
 
-### Examples using packaged versions
+### Examples using packaged versions of prerequisites
 
 Debian/Ubuntu:
 
-    # apt-get install python-dnspython
+    # apt-get install python3-dnspython python3-click
 
 RHEL/Centos/Fedora:
 
-    # yum install python-dns
+    # yum install python3-dns python3-click
 
-    # dnf install python2-dns
-
-FreeBSD:
-
-    # pkg install py27-dnspython
-
-Pkgin/pkgsrc based (NetBSD, SmartOS, OSX*, ...):
-
-    # pkgin install py27-dns
-
-    # pkg_add py27-dns
-
-### Example using pip
+### Example using pip to install the prerequisites
 
 Using pip:
 
-    # pip install dnspython
+    # pip install dnspython click
 
 
 ## Set up TSIG-based AXFR and dynamic update access.
@@ -50,18 +44,21 @@ After that it essentially comes down to:
 
 ### Example with BIND 9:
 
-Use [`dnssec-keygen`](http://ftp.isc.org/isc/bind9/cur/9.11/doc/arm/man.dnssec-keygen.html) to generate a TSIG key:
+Use [`tsig-keygen`](https://bind9.readthedocs.io/en/latest/manpages.html#tsig-keygen-tsig-key-generation-tool) to generate a TSIG key:
 
-    $ dnssec-keygen -a HMAC-SHA256 -b 256 -n USER my-key
-    Kmy-key.+163+57361
-    $ cat Kmy-key.+163+57361.key
-    my-key. IN KEY 0 3 163 L/FTU92hSZGjkRtaHIBbWuUkUFyoPY2wT4hAmkx1syk=
+    $ tsig-keygen my-key
+    key "my-key" {
+        algorithm hmac-sha256;
+        secret "L/FTU92hSZGjkRtaHIBbWuUkUFyoPY2wT4hAmkx1syk=";
+    };
     $
 
-In [`named.conf`](http://ftp.isc.org/isc/bind9/cur/9.11/doc/arm/Bv9ARM.ch06.html):
+Also save this to a file (eg dnsedit.key) with restrictive permissions.
 
-    key my-key. {
-        algorithm HMAC-SHA256;
+In [`named.conf`](https://bind9.readthedocs.io/en/latest/reference.html):
+
+    key "my-key" {
+        algorithm hmac-sha256;
         secret "L/FTU92hSZGjkRtaHIBbWuUkUFyoPY2wT4hAmkx1syk=";
     };
 
@@ -75,13 +72,13 @@ In [`named.conf`](http://ftp.isc.org/isc/bind9/cur/9.11/doc/arm/Bv9ARM.ch06.html
 
 ### Example with PowerDNS authoritative 4:
 
-> Note: pdns-auth 4 provides [`pdnsutil edit-zone`](https://doc.powerdns.com/md/manpages/pdnsutil.1/) which provides similar end-results if your goal is local editing.
+> Note: PowerDNS authoritative 4.x provides [`pdnsutil edit-zone`](https://doc.powerdns.com/authoritative/manpages/pdnsutil.1.html) which provides similar end-results if your goal is local editing.
 
-In [`pdns.conf`](https://doc.powerdns.com/md/authoritative/settings/):
+In [`pdns.conf`](https://doc.powerdns.com/authoritative/settings.html):
 
     dnsupdate=yes
 
-Use [`pdnsutil`](https://doc.powerdns.com/md/manpages/pdnsutil.1/) to generate a key and configure key-based authentication:
+Use [`pdnsutil`](https://doc.powerdns.com/authoritative/manpages/pdnsutil.1.html) to generate a key and configure key-based authentication:
 
     # pdnsutil generate-tsig-key my-key hmac-sha256
     Generating new key with 64 bytes (this can take a while)
@@ -99,44 +96,36 @@ Use [`pdnsutil`](https://doc.powerdns.com/md/manpages/pdnsutil.1/) to generate a
 
 To get the list of command-line options:
 
-    $ ./ddns-edit-zone.py -h
-    Usage: ddns-edit-zone.py [OPTION]... NAMESERVER ZONENAME KEYFILE
-    
-    Edit ZONENAME hosted on NAMESERVER, authenticate AXFR and update request with
-    the key from KEYFILE
+    $ ./ddns-edit-zone.py --help
+    Usage: ddns-edit-zone.py [OPTIONS] NAMESERVER ZONENAME [KEYFILE]
     
     Options:
-      -h, --help            show this help message and exit
-      -a, --absolute-names  use absolute names instead of names relative to zone
-                            apex
-      -S, --include-dnssec-nonsigs
-                            include NSEC3PARAM/DNSKEY records when editing
-      -s, --include-dnssec  include RRSIG/NSEC/NSEC3/NSEC3PARAM/DNSKEY records
-                            when editing
-      -c, --force-conflicts
-                            apply local changes even if zone has been updated
-                            while editing
-      -t TIMEOUT, --timeout=TIMEOUT
-                            query timeout (in seconds), default value 10
-      -l, --use-session-key
-                            use bind9 session key
-      --session-key-path=SESSION_KEY
-                            override path to bind9 session key, default value
-                            BIND_SESSION_KEY_PATH or /var/run/named/session.key
-      -q, --quiet           do not print status messages
-      -v, --verbose         print verbose messages suitable for troubleshooting
-      --dry-run             do not actually send update
-    
-    The editor will be chosen based on the environment variables DNSEDITOR, VISUAL
-    or EDITOR in that order or default to 'vi' if none of them were set. KEYFILE
-    is expected to contain exactly one KEY record suitable for TSIG use (what
-    dnssec-keygen(8) generates)
+      -a, --absolute-names          use absolute names instead of names relative
+                                    to zone apex
+      -S, --include-dnssec-nonsigs  include NSEC3PARAM/DNSKEY records when editing
+      -s, --include-dnssec          include RRSIG/NSEC/NSEC3/NSEC3PARAM/DNSKEY
+                                    records when editing
+      -c, --force-conflicts         apply local changes even if zone has been
+                                    updated while editing
+      -t, --timeout FLOAT           query timeout (in seconds)  [default: 10]
+      -l, --use-session-key         use bind9 session key
+      --session-key-path PATH       override path to bind9 session key, also
+                                    picked up from environment
+                                    BIND_SESSION_KEY_PATH  [default:
+                                    /var/run/named/session.key]
+      -q, --quiet                   do not print status messages
+      -v, --verbose                 print verbose messages suitable for
+                                    troubleshooting
+      --dry-run BOOLEAN             do not actually send update
+      --help                        Show this message and exit.
+
 
 Specifying a key file on the command line:
 
-    $ ./ddns-edit-zone.py ns.example.com example.com ~/keys/Kedit-zone.+161+38418.key
+    $ ./ddns-edit-zone.py 192.0.2.7 example.com ~/keys/dnsedit.key
 
 
-Using the BIND [session key](http://ftp.isc.org/isc/bind9/cur/9.11/doc/arm/Bv9ARM.ch06.html#dynamic_update_policies) locally (predefined TSIG key):
+Using the BIND [session
+key](https://bind9.readthedocs.io/en/latest/reference.html#namedconf-statement-session-keyfile) locally (predefined TSIG key):
 
-    $ ./ddns-edit-zone.py ns.example.com example.com -l
+    $ ./ddns-edit-zone.py 192.0.2.7 example.com -l
