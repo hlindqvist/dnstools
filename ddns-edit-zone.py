@@ -92,6 +92,19 @@ def get_default_session_key_path():
 
 
 def read_tsig_key_from_file(filename):
+    # try to read either a tsig-keygen style or
+    # (old) dnssec-keygen style file
+
+    try:
+        return read_tsig_key_from_keyfile(filename)
+    except Exception:
+        return read_tsig_key_from_configfile(filename)
+
+
+def read_tsig_key_from_keyfile(filename):
+
+    # Try to read a file with a DNS KEY record
+    # (ie what dnssec-keygen produces)
 
     # Read the whole file (expected to be small).
     key_file = open(filename, "r")
@@ -116,8 +129,13 @@ def read_tsig_key_from_file(filename):
 
 
 def read_tsig_key_from_session(filename):
+    return read_tsig_key_from_configfile(filename)
 
-    # Attempt to parse the bind session.key file.
+
+def read_tsig_key_from_configfile(filename):
+
+    # Attempt to parse the bind config file.
+    # (session file or tsig-keygen created key)
 
     # Read the whole file (expected to be small).
     session_key_file = open(filename, "r")
