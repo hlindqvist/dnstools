@@ -355,7 +355,7 @@ def main(absolute_names, include_dnssec_nonsigs, include_dnssec,
         try:
             # Read back the updated zone data from temp file
             updated_zone = read_zone_from_file(temp_file.name, zonename)
-        except dns.exception.SyntaxError as ex:
+        except dns.exception.DNSException as ex:
             print("Error reading updated zone file!")
             print(ex)
 
