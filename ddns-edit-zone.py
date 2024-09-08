@@ -243,11 +243,55 @@ def generate_update_from_diff(zonename, added, removed, oldsoa,
 
         update.present(oldsoa[0], oldsoa[2])
 
+
+    # RFC2136 has some unfortunate requirements regarding changes to the
+    # apex NS RRset that we need to work around in one way or another:
+    #
+    # * The server must silently skip removing the last apex NS RR
+    #   (even if the transaction has additions later on!)
+    # * There is an asymmetry between additions and deletions, such that
+    #   deletions cannot remove only a matching RR with a specific TTL
+    #
+    # So we face an issue where, depending on whether you do add,remove
+    # or remove,add, you get one of these problems:
+    # * TTL-only change of the RRSet deletes all but one NS RR
+    # * changing RData of every NS leaves one of the old RDatas behind
+    #
+    # To work around this, when the apex NS RRSet is being edited,
+    # we add a nonsense NS RR (pointing to invalid.) at the start
+    # of the transaction, and then delete it again at the end.
+    # This avoids the "skip removing last NS" from triggering, allowing
+    # all our changes to complete, and the nonsense RR is removed as part
+    # of the same transaction, so it should never be seen outside of the
+    # UPDATE message itself.
+
+
+    # start apex ns hack
+    dns_zonename = dns.name.from_text(zonename)
+    invalid_ns_rdata = dns.rdata.from_text(dns.rdataclass.IN, dns.rdatatype.NS, "invalid.")
+
+    def is_apex_ns(rr):
+        (name, ttl, rdata) = rr
+        return name == dns_zonename and rdata.rdtype == dns.rdatatype.NS
+
+    is_editing_apex_ns = any(is_apex_ns(x) for x in added) and any(is_apex_ns(x) for x in removed)
+
+    if is_editing_apex_ns:
+        update.add(dns_zonename, 1, invalid_ns_rdata)
+    # end apex ns hack
+
+
     for (name, ttl, rdata) in removed:
         update.delete(name, rdata)
 
     for (name, ttl, rdata) in added:
         update.add(name, ttl, rdata)
+
+
+    # start apex ns hack
+    if is_editing_apex_ns:
+        update.delete(dns_zonename, invalid_ns_rdata)
+    # end apex ns hack
 
     return update
 
